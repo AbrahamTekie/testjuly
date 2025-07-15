@@ -1,0 +1,190 @@
+# Enhanced production-ready configuration
+global:
+  logging_level: INFO
+  data_path: ${ENV:DATA_PATH:-data/}
+  model_path: ${ENV:MODEL_PATH:-models/}
+  scaling_factor: 10000
+  max_position_size: 1.0
+  transaction_cost: 0.0001
+  initial_balance: 100000
+  max_drawdown: 0.1
+  risk_free_rate: 0.01
+
+plugins:
+  # Data Providers
+  - name: forex_data_provider
+    type: data_provider
+    class: plugin_system.IBKRProvider
+    config:
+      symbol: EURUSD
+      timeframe: H1
+      data_file: "data/eurusd_h1.parquet"
+      api_key: ${ENV:IBKR_API_KEY}
+      api_secret: ${ENV:IBKR_API_SECRET}
+  
+  # Data Processing
+  - name: data_processor
+    type: data_processor
+    class: plugin_system.ForexDataProcessor
+    config:
+      outlier_threshold: 3.5
+      normalize_features: [open, high, low, close, volume]
+      fill_method: ffill
+  
+  # Feature Engineering
+  - name: feature_engineer
+    type: feature_engineer
+    class: plugin_system.TechnicalIndicators
+    config:
+      indicators:
+        - rsi_14
+        - macd
+        - bollinger_bands
+        - atr
+  
+  # Reinforcement Learning Model
+  - name: drl_model
+    type: model
+    class: plugin_system.PPOModel
+    config:
+      policy: MlpPolicy
+      n_steps: 2048
+      batch_size: 128
+      n_epochs: 10
+      learning_rate: 0.0003
+      clip_range: 0.2
+      ent_coef: 0.01
+      gamma: 0.99
+      gae_lambda: 0.95
+      target_kl: 0.05
+      tensorboard_log: "${global.model_path}/tensorboard/"
+  
+  # Trading Environment
+  - name: trading_env
+    type: environment
+    class: plugin_system.ForexTradingEnv
+    config:
+      initial_balance: ${global.initial_balance}
+      transaction_cost: ${global.transaction_cost}
+      max_position_size: ${global.max_position_size}
+      features: [close, rsi_14, macd, bollinger_upper, bollinger_lower, atr]
+      reward_function: risk_adjusted_reward
+  
+  # Reward Function
+  - name: risk_adjusted_reward
+    type: reward_function
+    class: plugin_system.ForexRewardFunction
+    config:
+      reward_type: sortino
+      lookback: 20
+      risk_free_rate: ${global.risk_free_rate}
+  
+  # Backtesting Engine
+  - name: backtester
+    type: backtester
+    class: plugin_system.BacktestEngine
+    config:
+      initial_balance: ${global.initial_balance}
+      transaction_cost: ${global.transaction_cost}
+      max_drawdown: ${global.max_drawdown}
+      max_position_size: ${global.max_position_size}
+  
+  # Hyperparameter Optimization
+  - name: optimizer
+    type: optimizer
+    class: plugin_system.ForexHyperparameterOptimizer
+    config:
+      objective: sortino_ratio
+      n_trials: 100
+      param_space:
+        learning_rate:
+          type: float
+          low: 0.00001
+          high: 0.001
+          log: true
+        n_steps:
+          type: int
+          low: 512
+          high: 4096
+        batch_size:
+          type: int
+          low: 32
+          high: 256
+
+pipelines:
+  # Training Pipeline
+  - name: train
+    steps:
+      - type: data_loading
+        component: forex_data_provider
+        params:
+          symbol: EURUSD
+      - type: data_processing
+        component: data_processor
+      - type: feature_extraction
+        component: feature_engineer
+      - type: environment_setup
+        component: trading_env
+      - type: model_training
+        component: drl_model
+        params:
+          total_timesteps: 100000
+          log_interval: 10
+          save_path: "${global.model_path}/ppo_forex"
+  
+  # Backtesting Pipeline
+  - name: backtest
+    steps:
+      - type: data_loading
+        component: forex_data_provider
+        params:
+          symbol: EURUSD
+      - type: data_processing
+        component: data_processor
+      - type: feature_extraction
+        component: feature_engineer
+      - type: environment_setup
+        component: trading_env
+      - type: prediction
+        component: drl_model
+      - type: evaluation
+        component: backtester
+  
+  # Optimization Pipeline
+  - name: optimize
+    steps:
+      - type: data_loading
+        component: forex_data_provider
+        params:
+          symbol: EURUSD
+      - type: data_processing
+        component: data_processor
+      - type: feature_extraction
+        component: feature_engineer
+      - type: environment_setup
+        component: trading_env
+      - type: optimization
+        component: optimizer
+        params:
+          objective: ${params.objective}
+          n_trials: ${params.n_trials}
+  
+  # Live Trading Pipeline
+  - name: live_trading
+    steps:
+      - type: data_loading
+        component: forex_data_provider
+        params:
+          symbol: EURUSD
+          real_time: true
+      - type: data_processing
+        component: data_processor
+      - type: feature_extraction
+        component: feature_engineer
+      - type: prediction
+        component: drl_model
+      - type: trade_execution
+        component: forex_data_provider
+        params:
+          risk_per_trade: 0.01
+          max_slippage: 0.0002
